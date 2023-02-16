@@ -4,3 +4,4 @@ OpenAIAuth
 undetected_chromedriver
 uvicorn
 asgiref
+requests

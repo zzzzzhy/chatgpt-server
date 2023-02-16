@@ -5,7 +5,7 @@ import json
 import os
 import tls_client
 import uvicorn
-import logging
+import sys
 import uuid
 from os import environ
 from os import getenv
@@ -15,19 +15,23 @@ from asgiref.wsgi import WsgiToAsgi
 from flask import Flask
 from flask import jsonify
 from flask import request
+# from module.cloudflare import get_cookies
 # from OpenAIAuth.Cloudflare import Cloudflare
+authentication = {}
 
-GPT_PROXY = os.getenv('GPT_PROXY')
+authentication["cf_clearance"]='4zfY9YkyH2px.YqR36WWP47ulw.kia08_XS8D3ushnc-1676575596-0-1-c9e8a8ec.460421bb.9ee9f70c-250'
+authentication["user_agent"]='Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:103.0) Gecko/20100101 Firefox/103.0'
+# (authentication["user_agent"],authentication["cf_clearance"],)=get_cookies()
+GPT_PROXY = os.getenv('GPT_PROXY','')
 GPT_HOST = os.getenv('GPT_HOST', '0.0.0.0')
-GPT_PORT = int(os.getenv('GPT_PORT', 5000))
+GPT_PORT = int(os.getenv('GPT_PORT', 8888))
 
 app = Flask(__name__)
 
-session = tls_client.Session(client_identifier="chrome_108", )
+session = tls_client.Session(client_identifier="firefox_102", )
 if GPT_PROXY:
     session.proxies.update(http=GPT_PROXY, https=GPT_PROXY)
 
-authentication = {}
 
 context = {"blocked": False}
 with open('config.json', encoding="utf-8") as f:
@@ -65,6 +69,7 @@ def __check_response(response):
         error.message = response.text
         raise error
 
+
 def conversation(subpath: str, method: str, data: str):
     if config.get("access_token") is None:
         return jsonify({"error": "Missing access_token"})
@@ -82,23 +87,22 @@ def conversation(subpath: str, method: str, data: str):
         # Set user agent
         headers = {
             "Accept": "text/event-stream",
-            "Authorization": f"Bearer {access_token}",
-            "User-Agent": authentication["user_agent"],
+            # "Authorization": "Bearer {access_token}",
+            # "User-Agent": authentication["user_agent"],
             "Content-Type": "application/json",
             "X-Openai-Assistant-App-Id": "",
             "Connection": "close",
             "Accept-Language": "en-US,en;q=0.9",
             "Referer": "https://chat.openai.com/" + "chat",
         }
-
         # Send request to OpenAI
         if method == "POST":
+            # req = scraper.get(url)
             response = session.post(
                 url="https://chat.openai.com/" + subpath,
                 headers=headers,
                 cookies=cookies,
                 data=data,
-                timeout_seconds=360,
             )
         elif method == "GET":
             response = session.get(
@@ -127,20 +131,18 @@ def conversation(subpath: str, method: str, data: str):
             context["blocked"] = False
             # return error
             return jsonify({
-                "error": response.status_code
+                "error": response.status_code,
+                "msg": response.text
             })
         # Return response
+        print(response.text)
         return response.text
     except Exception as exc:
         return jsonify({"error": str(exc)})
 
+
 @app.route("/ask", methods=["POST"])
-def ask(
-    prompt,
-    conversation_id=None,
-    parent_id=None,
-    gen_title=True,
-):
+def ask():
     """
     Ask a question to the chatbot
     :param prompt: String
@@ -148,6 +150,11 @@ def ask(
     :param parent_id: UUID
     :param gen_title: Boolean
     """
+    # return request.get_json()
+    prompt=request.get_json().get("prompt")
+    conversation_id=request.get_json().get("conversation_id",None)
+    parent_id=request.get_json().get("parent_id",None)
+    gen_title=True,
     if parent_id is not None:
         if conversation_id is None:
             error = Error()
@@ -157,18 +164,8 @@ def ask(
             raise error
         # user-specified covid and parid, check skipped to avoid rate limit
     else:
-        if conversation_id is None: # new conversation
+        if conversation_id is None:  # new conversation
             parent_id = str(uuid.uuid4())
-        else: # old conversation, parent_id should be retrieved by conversation_id
-            if conversation_id == self.conversation_id: # conversation not changed
-                parent_id = self.parent_id
-            else: # conversation changed
-                # assume no one else can access the current conversation
-                # hence no need to invoke __map_conversations() 
-                # if conversation_id exists in conversation_mapping
-                if conversation_id not in self.conversation_mapping:
-                    self.__map_conversations()
-                parent_id = self.conversation_mapping[conversation_id]
     data = {
         "action": "next",
         "messages": [
@@ -181,21 +178,14 @@ def ask(
         "conversation_id": conversation_id,
         "parent_message_id": parent_id,
         "model": "text-davinci-002-render-sha"
-        if not self.config.get("paid")
+        if not config.get("paid")
         else "text-davinci-002-render-paid",
     }
     # new_conv = data["conversation_id"] is None
-    self.conversation_id_prev_queue.append(
-        data["conversation_id"],
-    )  # for rollback
-    self.parent_id_prev_queue.append(data["parent_message_id"])
-    response = self.session.post(
-        url=BASE_URL + "api/conversation",
-        data=json.dumps(data),
-        timeout=360,
-        stream=True,
-    )
-    self.__check_response(response)
+    response = conversation("api/conversation", "POST", json.dumps(data))
+    print(response)
+    __check_response(response)
+    results=[]
     for line in response.iter_lines():
         line = str(line)[2:-1]
         if line == "" or line is None:
@@ -214,34 +204,35 @@ def ask(
             line = json.loads(line)
         except json.decoder.JSONDecodeError:
             continue
-        if not self.__check_fields(line):
+        if not __check_fields(line):
             print("Field missing")
             print(line)
             continue
-        message = line["message"]["content"]["parts"][0]
-        conversation_id = line["conversation_id"]
-        parent_id = line["message"]["id"]
-        yield {
-            "message": message,
-            "conversation_id": conversation_id,
-            "parent_id": parent_id,
-        }
-    if parent_id is not None:
-        self.parent_id = parent_id
-    if conversation_id is not None:
-        self.conversation_id = conversation_id
+        results.append(line)
+        # message = line["message"]["content"]["parts"][0]
+        # conversation_id = line["conversation_id"]
+        # parent_id = line["message"]["id"]
+        # yield {
+        #     "message": message,
+        #     "conversation_id": conversation_id,
+        #     "parent_id": parent_id,
+        # }
+    return results
 
 
 @app.route("/get_conversations", methods=["GET"])
-def get_conversations(offset=0, limit=20):
+def get_conversations():
     """
     Get conversations
     :param offset: Integer
     :param limit: Integer
     """
+    offset=0
+    limit=20
     response = conversation(
-        f"api/conversations?offset={offset}&limit={limit}", "GET", None)
+        "api/conversations?offset={offset}&limit={limit}", "GET", None)
     __check_response(response)
+    return response
     data = json.loads(response.text)
     return data["items"]
 
@@ -252,7 +243,7 @@ def get_msg_history(convo_id):
     Get message history
     :param id: UUID of conversation
     """
-    response = conversation(f"api/conversation/{convo_id}", "GET", None)
+    response = conversation("api/conversation/{convo_id}", "GET", None)
     __check_response(response)
     data = json.loads(response.text)
     return data
@@ -267,7 +258,7 @@ def gen_title(convo_id, message_id):
         {"message_id": message_id, "model": "text-davinci-002-render"},
     )
     response = conversation(
-        f"api/conversation/gen_title/{convo_id}", "POST", data)
+        "api/conversation/gen_title/{convo_id}", "POST", data)
     __check_response(response)
 
 
@@ -279,7 +270,7 @@ def change_title(convo_id, title):
     :param title: String
     """
     data = f'{{"title": "{title}"}}'
-    response = conversation(f"api/conversation/{convo_id}", "PATCH", data)
+    response = conversation("api/conversation/{convo_id}", "PATCH", data)
     __check_response(response)
 
 
@@ -290,7 +281,7 @@ def delete_conversation(convo_id):
     :param id: UUID of conversation
     """
     data = '{"is_visible": false}'
-    response = conversation(f"api/conversation/{convo_id}", "PATCH", data)
+    response = conversation("api/conversation/{convo_id}", "PATCH", data)
     __check_response(response)
 
 
