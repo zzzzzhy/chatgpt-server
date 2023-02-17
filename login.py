@@ -81,12 +81,13 @@ class Chatbot:
         if auth.access_token:
             self.__refresh_headers(auth.access_token)
             self.config["access_token"] = auth.access_token
-            
+            self.config.remove("email")
+            self.config.remove("password")
             with open('config.json','w') as f:
                 f.write(json.dumps(self.config))
             sys.exit(200)
 
 if __name__ == '__main__':
-    with open("config.json", encoding="utf-8") as f:
+    with open("login.json", encoding="utf-8") as f:
         config = json.load(f)
     Chatbot(config)
